@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Teacher Dashboard - QR Attendance</title>
+  <link rel="stylesheet" href="style.css">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+</head>
+<body>
+  <div class="container">
+    <div class="topbar">
+      <h2>Teacher Dashboard</h2>
+      <button class="logout-btn" onclick="Auth.logout(); window.location.href='index.html'">
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/></svg>
+        Logout
+      </button>
+    </div>
+
+    <!-- Main Dashboard View -->
+    <div id="mainDashboard">
+      <div class="card" style="margin-bottom: 2rem;">
+        <h3>Create New Session</h3>
+        <form id="createSessionForm" style="display: flex; gap: 1rem; margin-top: 1rem;">
+          <input type="text" id="sessionTitle" placeholder="Session Title (e.g. CS101)" required style="flex:1; padding: 0.75rem; border: 1px solid var(--border-color); border-radius: 0.5rem;">
+          <button type="submit" class="btn btn-primary" style="width: auto;">Start Session</button>
+        </form>
+        <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;">GPS Location will be attached if permissions are granted.</p>
+      </div>
+
+      <div class="card">
+        <h3>Recent Sessions</h3>
+        <div id="sessionsList" style="margin-top: 1rem;"></div>
+      </div>
+    </div>
+
+    <!-- Live Session View -->
+    <div id="liveSession" class="hidden">
+      <button class="btn btn-secondary" style="width: auto; margin-bottom: 1rem;" onclick="showDashboard()">← Back</button>
+      <div class="grid grid-2">
+        <div class="card" style="display: flex; flex-direction: column; align-items: center;">
+          <h2 id="liveTitle" style="margin-bottom: 0.5rem;">Session Title</h2>
+          <p id="liveStatus" style="color: var(--text-muted); margin-bottom: 2rem;">Scan the QR code to mark attendance</p>
+          <div id="qrcode" style="padding: 1rem; background: white; border-radius: 1rem; border: 1px solid var(--border-color);"></div>
+          <p style="font-size: 0.8rem; color: var(--primary); margin-top: 1rem; font-family: monospace; animation: fadeIn 1s infinite alternate;">Dynamic QR Code - Auto Refreshes</p>
+        </div>
+        
+        <div class="card">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+            <h3>Attendance List</h3>
+            <span id="attendanceCount" class="badge active">0 Present</span>
+          </div>
+          <div id="attendanceList"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+  <script>
+    const user = Auth.requireRole('TEACHER');
+    let qrRefreshInterval;
+    let listRefreshInterval;
+    let activeSessionId = null;
+    let qrCodeObj = null;
+
+    function renderSessions() {
+      const sessions = AttendanceSys.getTeacherSessions(user.id);
+      const list = document.getElementById('sessionsList');
+      list.innerHTML = '';
+      if(sessions.length === 0) {
+        list.innerHTML = '<p style="color: var(--text-muted);">No sessions yet.</p>';
+        return;
+      }
+
+      sessions.forEach(s => {
+        const div = document.createElement('div');
+        div.className = 'list-item';
+        div.innerHTML = `
+          <div>
+            <h4 style="margin-bottom: 0.25rem;">${s.title}</h4>
+            <span style="font-size: 0.8rem; color: var(--text-muted);">${new Date(s.createdAt).toLocaleString()}</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 1rem;">
+            <span class="badge ${s.active ? 'active' : 'ended'}">${s.active ? 'Active' : 'Ended'}</span>
+            <button class="btn btn-secondary" style="padding: 0.25rem 0.75rem; font-size: 0.875rem; width: auto;" onclick="openSession('${s.id}')">View</button>
+          </div>
+        `;
+        list.appendChild(div);
+      });
+    }
+
+    document.getElementById('createSessionForm').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const title = document.getElementById('sessionTitle').value;
+      
+      // Try to get GPS
+      if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            const s = AttendanceSys.createSession(user.id, title, pos.coords.latitude, pos.coords.longitude);
+            openSession(s.id);
+          },
+          (err) => {
+            const s = AttendanceSys.createSession(user.id, title, null, null);
+            openSession(s.id);
+          }
+        );
+      } else {
+        const s = AttendanceSys.createSession(user.id, title, null, null);
+        openSession(s.id);
+      }
+    });
+
+    function showDashboard() {
+      document.getElementById('mainDashboard').classList.remove('hidden');
+      document.getElementById('liveSession').classList.add('hidden');
+      clearInterval(qrRefreshInterval);
+      clearInterval(listRefreshInterval);
+      renderSessions();
+    }
+
+    function openSession(id) {
+      document.getElementById('mainDashboard').classList.add('hidden');
+      document.getElementById('liveSession').classList.remove('hidden');
+      activeSessionId = id;
+      
+      const { session } = AttendanceSys.getSessionDetails(id);
+      document.getElementById('liveTitle').innerText = session.title;
+      
+      if(session.active) {
+        document.getElementById('liveStatus').innerText = 'Scan the QR code to mark attendance';
+        document.getElementById('qrcode').style.display = 'block';
+        updateQRCode();
+        qrRefreshInterval = setInterval(updateQRCode, 15000); // 15s refresh
+      } else {
+        document.getElementById('liveStatus').innerText = 'Session Ended';
+        document.getElementById('qrcode').style.display = 'none';
+        clearInterval(qrRefreshInterval);
+      }
+
+      updateAttendanceList();
+      listRefreshInterval = setInterval(updateAttendanceList, 2000); // Check for new scans
+    }
+
+    function updateQRCode() {
+      if(!activeSessionId) return;
+      const token = AttendanceSys.generateQRToken(activeSessionId);
+      const url = `${window.location.origin}/student.html?token=${token}`;
+      
+      const qrContainer = document.getElementById('qrcode');
+      qrContainer.innerHTML = '';
+      qrCodeObj = new QRCode(qrContainer, {
+        text: url,
+        width: 200,
+        height: 200,
+        colorDark : "#0f172a",
+        colorLight : "#ffffff",
+        correctLevel : QRCode.CorrectLevel.H
+      });
+    }
+
+    function updateAttendanceList() {
+      if(!activeSessionId) return;
+      const { attendances } = AttendanceSys.getSessionDetails(activeSessionId);
+      
+      document.getElementById('attendanceCount').innerText = `${attendances.length} Present`;
+      const list = document.getElementById('attendanceList');
+      list.innerHTML = '';
+      
+      if(attendances.length === 0) {
+        list.innerHTML = '<p style="color: var(--text-muted); text-align: center; padding: 2rem 0;">Waiting for students...</p>';
+        return;
+      }
+
+      attendances.forEach(a => {
+        const div = document.createElement('div');
+        div.className = 'list-item';
+        div.style.padding = '0.75rem';
+        div.innerHTML = `
+          <span style="font-weight: 500;">${a.studentName}</span>
+          <span style="font-size: 0.8rem; color: var(--text-muted); font-family: monospace;">${new Date(a.timestamp).toLocaleTimeString()}</span>
+        `;
+        list.appendChild(div);
+      });
+    }
+
+    // Init
+    renderSessions();
+  </script>
+</body>
+</html>

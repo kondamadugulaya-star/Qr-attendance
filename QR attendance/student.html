@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Student Dashboard - QR Attendance</title>
+  <link rel="stylesheet" href="style.css">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+</head>
+<body>
+  <div class="container">
+    <div class="topbar">
+      <h2>Student Dashboard</h2>
+      <button class="logout-btn" onclick="Auth.logout(); window.location.href='index.html'">
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/></svg>
+        Logout
+      </button>
+    </div>
+
+    <!-- Main Dashboard -->
+    <div id="mainDashboard">
+      <div class="card" style="text-align: center; margin-bottom: 2rem;">
+        <div class="icon-wrapper" style="margin-bottom: 1rem;">
+          <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/></svg>
+        </div>
+        <h3 style="margin-bottom: 0.5rem;">Ready for Class?</h3>
+        <p style="color: var(--text-muted); margin-bottom: 1.5rem;">Scan the QR code displayed by your teacher to mark your attendance.</p>
+        <button class="btn btn-primary" style="width: auto;" onclick="startScanner()">Scan QR Code</button>
+      </div>
+
+      <div class="card">
+        <h3>My Attendance History</h3>
+        <div id="historyList" style="margin-top: 1rem;"></div>
+      </div>
+    </div>
+
+    <!-- Scanner View -->
+    <div id="scannerView" class="hidden">
+      <button class="btn btn-secondary" style="width: auto; margin-bottom: 1rem;" onclick="stopScanner()">← Cancel</button>
+      <div class="card" style="max-width: 500px; margin: 0 auto; text-align: center;">
+        <h3 id="scanStatusTitle" style="margin-bottom: 1rem;">Scanning...</h3>
+        <p id="scanStatusMsg" style="color: var(--text-muted); margin-bottom: 1rem;">Point your camera at the teacher's screen.</p>
+        
+        <div id="reader"></div>
+
+        <div id="scanResult" class="hidden" style="padding: 2rem 0;">
+          <div id="scanIcon" style="margin-bottom: 1rem;"></div>
+          <h2 id="scanMessage"></h2>
+          <button class="btn btn-primary" style="width: auto; margin-top: 2rem;" onclick="stopScanner()">Return to Dashboard</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+  <script>
+    const user = Auth.requireRole('STUDENT');
+    let html5QrcodeScanner = null;
+
+    function renderHistory() {
+      const history = AttendanceSys.getStudentAttendances(user.id);
+      const list = document.getElementById('historyList');
+      list.innerHTML = '';
+      if(history.length === 0) {
+        list.innerHTML = '<p style="color: var(--text-muted);">No attendance records found.</p>';
+        return;
+      }
+
+      history.forEach(a => {
+        const div = document.createElement('div');
+        div.className = 'list-item';
+        div.innerHTML = `
+          <div>
+            <h4 style="margin-bottom: 0.25rem;">${a.sessionTitle}</h4>
+            <span style="font-size: 0.8rem; color: var(--text-muted);">${new Date(a.timestamp).toLocaleDateString()}</span>
+          </div>
+          <span style="font-family: monospace; font-size: 0.875rem; background: #f1f5f9; padding: 0.25rem 0.5rem; border-radius: 0.25rem;">${new Date(a.timestamp).toLocaleTimeString()}</span>
+        `;
+        list.appendChild(div);
+      });
+    }
+
+    function startScanner() {
+      document.getElementById('mainDashboard').classList.add('hidden');
+      document.getElementById('scannerView').classList.remove('hidden');
+      document.getElementById('reader').classList.remove('hidden');
+      document.getElementById('scanResult').classList.add('hidden');
+      document.getElementById('scanStatusTitle').innerText = 'Scanning...';
+      document.getElementById('scanStatusMsg').innerText = 'Point your camera at the teacher\'s screen.';
+
+      html5QrcodeScanner = new Html5QrcodeScanner(
+        "reader",
+        { fps: 10, qrbox: {width: 250, height: 250} },
+        /* verbose= */ false);
+      html5QrcodeScanner.render(onScanSuccess, onScanFailure);
+    }
+
+    function stopScanner() {
+      if(html5QrcodeScanner) {
+        html5QrcodeScanner.clear().catch(error => {
+          console.error("Failed to clear html5QrcodeScanner. ", error);
+        });
+      }
+      document.getElementById('scannerView').classList.add('hidden');
+      document.getElementById('mainDashboard').classList.remove('hidden');
+      renderHistory();
+    }
+
+    function processToken(token) {
+      document.getElementById('reader').classList.add('hidden');
+      document.getElementById('scanResult').classList.remove('hidden');
+      document.getElementById('scanStatusTitle').innerText = 'Processing...';
+      document.getElementById('scanStatusMsg').innerText = 'Getting location and verifying code...';
+      
+      const successHTML = `<svg style="color: var(--success); width: 64px; height: 64px; margin: 0 auto;" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>`;
+      const errorHTML = `<svg style="color: var(--error); width: 64px; height: 64px; margin: 0 auto;" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>`;
+
+      if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            try {
+              AttendanceSys.submitAttendance(token, user.id, pos.coords.latitude, pos.coords.longitude);
+              document.getElementById('scanIcon').innerHTML = successHTML;
+              document.getElementById('scanMessage').innerText = 'Attendance Marked!';
+              document.getElementById('scanStatusTitle').innerText = 'Success';
+            } catch (err) {
+              document.getElementById('scanIcon').innerHTML = errorHTML;
+              document.getElementById('scanMessage').innerText = err.message;
+              document.getElementById('scanStatusTitle').innerText = 'Failed';
+            }
+          },
+          (err) => {
+            document.getElementById('scanIcon').innerHTML = errorHTML;
+            document.getElementById('scanMessage').innerText = 'Location permission is required.';
+            document.getElementById('scanStatusTitle').innerText = 'Error';
+          }
+        );
+      } else {
+        document.getElementById('scanIcon').innerHTML = errorHTML;
+        document.getElementById('scanMessage').innerText = 'Geolocation is not supported by your browser.';
+        document.getElementById('scanStatusTitle').innerText = 'Error';
+      }
+    }
+
+    function onScanSuccess(decodedText, decodedResult) {
+      if(html5QrcodeScanner) {
+        html5QrcodeScanner.clear();
+      }
+      
+      try {
+        const url = new URL(decodedText);
+        const token = url.searchParams.get('token');
+        if(token) {
+          processToken(token);
+        } else {
+          throw new Error('Invalid QR Format');
+        }
+      } catch (e) {
+        document.getElementById('reader').classList.add('hidden');
+        document.getElementById('scanResult').classList.remove('hidden');
+        document.getElementById('scanIcon').innerHTML = `<svg style="color: var(--error); width: 64px; height: 64px; margin: 0 auto;" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>`;
+        document.getElementById('scanMessage').innerText = 'Unrecognized QR Code';
+        document.getElementById('scanStatusTitle').innerText = 'Error';
+      }
+    }
+
+    function onScanFailure(error) {
+      // ignore
+    }
+
+    // Check if token in URL (student navigated directly)
+    window.addEventListener('load', () => {
+      renderHistory();
+      const params = new URLSearchParams(window.location.search);
+      const token = params.get('token');
+      if (token) {
+        document.getElementById('mainDashboard').classList.add('hidden');
+        document.getElementById('scannerView').classList.remove('hidden');
+        processToken(token);
+        // remove token from url
+        window.history.replaceState({}, document.title, window.location.pathname);
+      }
+    });
+
+  </script>
+</body>
+</html>
